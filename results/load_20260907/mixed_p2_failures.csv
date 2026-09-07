@@ -1,0 +1,10 @@
+Method,Name,Error,Occurrences,First Seen,Last Seen
+GET,GET /articles (list),HTTPError('500 Server Error: Internal Server Error for url: GET /articles (list)'),38,2026-09-07T08:14:55Z,2026-09-07T08:19:26Z
+GET,GET /articles (list),"ConnectionResetError(10054, '远程主机强迫关闭了一个现有的连接。', None, 10054, None)",5,2026-09-07T08:18:25Z,2026-09-07T08:18:56Z
+GET,GET /articles/{id} (detail),HTTPError('500 Server Error: Internal Server Error for url: GET /articles/{id} (detail)'),9,2026-09-07T08:15:56Z,2026-09-07T08:19:26Z
+GET,GET /articles (anon),"ConnectionResetError(10054, '远程主机强迫关闭了一个现有的连接。', None, 10054, None)",11,2026-09-07T08:15:56Z,2026-09-07T08:18:56Z
+GET,GET /articles/{id} (detail),"ConnectionResetError(10054, '远程主机强迫关闭了一个现有的连接。', None, 10054, None)",3,2026-09-07T08:15:56Z,2026-09-07T08:18:56Z
+GET,GET /articles (list),RemoteDisconnected('Remote end closed connection without response'),2,2026-09-07T08:18:56Z,2026-09-07T08:18:56Z
+GET,GET /articles/{id} (detail),RemoteDisconnected('Remote end closed connection without response'),1,2026-09-07T08:18:56Z,2026-09-07T08:18:56Z
+GET,GET /articles (anon),HTTPError('500 Server Error: Internal Server Error for url: GET /articles (anon)'),126,2026-09-07T08:14:55Z,2026-09-07T08:19:26Z
+POST,[setup] POST /auth/login,HTTPError('500 Server Error: Internal Server Error for url: [setup] POST /auth/login'),5,2026-09-07T08:14:55Z,2026-09-07T08:18:56Z

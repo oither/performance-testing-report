@@ -1,0 +1,6 @@
+locust>=2.24
+requests
+python-dotenv
+psutil
+matplotlib
+pandas

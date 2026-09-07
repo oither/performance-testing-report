@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 种子文件含账号 Token，不入库；需要时重新跑 seed_data.py 生成
+results/seed_ids.json
+
+# 本地临时文件
+*.log
+.DS_Store
+Thumbs.db
