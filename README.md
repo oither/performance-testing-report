@@ -3,11 +3,12 @@
 基于 **Locust** 对博客系统（FastAPI + SQLite）核心链路进行基准 / 阶梯负载 / 并发峰值
 三类场景压测，最高模拟 200 并发用户。定位出**双重瓶颈**：登录接口在 async 事件循环里
 跑 bcrypt（10 并发即打满单核、TPS 封顶 ~4/s），并连锁触发 SQLAlchemy 连接池耗尽
-（拐点 50→100 并发，P95 从 16ms 恶化到 30s，246 次 HTTP 500）；纯读链路则可扛住
-200 并发瞬发（198 TPS、P99 160ms、零错误）。优化验证进行中，见
-[docs/performance-report.md](docs/performance-report.md)。
+（拐点 50→100 并发，P95 从 16ms 恶化到 30s，246 次 HTTP 500）。在被测系统 `perf-opt`
+分支实施 login 移出事件循环 + 连接池扩容 + WAL 三项优化后复测：**混合场景 200 并发内
+TPS 线性扩展（0→196）、P95 30s+→32ms、错误清零；登录专项 TPS 4.2→35.7（8.5 倍）、
+P99 317s→4.6s**。完整证据链见 [docs/performance-report.md](docs/performance-report.md)。
 
-> 被测系统：[blog-system-under-test](../blog-system-under-test) ｜ 功能正确性保障：[api-test-framework](../api-test-framework)
+> 被测系统：[blog-system-under-test](../blog-system-under-test)（优化在 `perf-opt` 分支）｜ 功能正确性保障：[api-test-framework](../api-test-framework)
 
 ## 技术栈
 
@@ -128,7 +129,7 @@ python scripts/reset_db.py            # 只清理压测造的数据（loaduser_*
 python scripts/reset_db.py --rebuild  # 删掉整个 blog.db 重建空库（慎用，会丢所有数据）
 ```
 
-## 核心数据速览（2026-09-07 首轮采数）
+## 核心数据速览（2026-09-07）
 
 | 场景 | 并发 | TPS | P50 | P95 | P99 | 错误率 |
 |------|------|-----|-----|-----|-----|--------|
@@ -139,13 +140,24 @@ python scripts/reset_db.py --rebuild  # 删掉整个 blog.db 重建空库（慎�
 | 登录专项 | 10 | 3.7 | 764ms | 1.5s | 2s | 0%（CPU 88% 打满单核）|
 | 并发峰值·纯读 | 200（瞬发）| 198.3 | 7ms | 44ms | 160ms | **0%** |
 
-瓶颈定位：登录接口在 async 事件循环里跑 bcrypt（单核 ~4 TPS 上限），爬坡期登录风暴阻塞事件循环 → 线程池占满 → SQLAlchemy 连接池（5+10）checkout 30s 超时 → 246 次 HTTP 500 成批爆发。完整证据链见 [docs/performance-report.md](docs/performance-report.md)，图表见 [charts/](charts/)。
+**优化后复测（perf-opt 分支：login 移出事件循环 + 连接池 40 + WAL）：**
+
+| 场景 | 并发 | TPS 前→后 | P95 前→后 | 错误 前→后 |
+|------|------|-----------|-----------|------------|
+| 阶梯·混合 | 100 | ≈0 → **99.0** | 37.6s → **18ms** | 500 风暴 → **0** |
+| 阶梯·混合 | 200 | ≈0 → **196.0** | ≈17s → **32ms** | 峰值 65.8% → **0** |
+| 登录专项 | 100 | 1.7 → **35.7** | 42.2s → **1.4s** | 11.8% → **0** |
+| 登录专项 | 200 | 1.5 → **35.4** | 75.4s → **4.1s** | 3.8% → **0** |
+
+优化后混合场景 TPS 随并发线性扩展（10→9.8 … 200→196），登录进程 CPU 从 88%（单核）到 1560%（~16 核并行 bcrypt），压后不重启服务也正常响应（假死根治）。对比图：[opt_compare_tps.png](charts/opt_compare_tps.png) / [opt_compare_p95.png](charts/opt_compare_p95.png)。
+
+瓶颈定位与归因的完整证据链见 [docs/performance-report.md](docs/performance-report.md)，全部图表见 [charts/](charts/)。
 
 ## 遇到的问题与解决
 
 1. **造数接口全部 422**：种子邮箱用 `@loadtest.local`，而 `.local` 是保留域名，被 email-validator 拒绝，注册静默失败导致后续登录 401。**解决**：改用规范放行的 `@example.com`，并给注册响应加状态码检查。教训：造数脚本的每一步都要 assert，不能 fire-and-forget。
 2. **基准测试压出 0 个请求**：`-u 1` 时 Locust 按 1:2 权重随机挑用户类，随机到匿名类后 `--tags list` 过滤掉了它的全部任务。**解决**：给用户类权重加环境变量开关（`READER_WEIGHT/ANON_WEIGHT`），基准采数时把另一类设为 0，实现确定性单类压测。
-3. **压测后服务"假死"**：含大量登录的场景跑完后，服务进程活着、端口在监听，但不 accept 任何连接（进程 CPU≈0，持续数分钟）。**定位**：`async def login` 在事件循环里直接跑 bcrypt，结合连接断开的取消风暴把循环卡死；纯读场景压完 3 秒即恢复，对比锁定登录链路。**临时处置**：每个重场景前重启服务保证起点一致；根治方案（login 移出事件循环）列入第 2 周优化验证。这个"假死"本身就是报告里最有价值的发现之一。
+3. **压测后服务"假死"**：含大量登录的场景跑完后，服务进程活着、端口在监听，但不 accept 任何连接（进程 CPU≈0，持续数分钟）。**定位**：`async def login` 在事件循环里直接跑 bcrypt，结合连接断开的取消风暴把循环卡死；纯读场景压完 3 秒即恢复，对比锁定登录链路。**根治**：perf-opt 分支把 login 改为同步 def（进线程池）后，同样强度的压测跑完不重启直接健康检查 2.4ms 正常响应——假死消失，且该修复贡献了登录 TPS 8.5 倍的提升。
 
 ## 设计取舍
 

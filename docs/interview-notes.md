@@ -66,8 +66,20 @@ SQLite 整库一把写锁，同一时刻只允许一个连接写。并发写请�
 
 - 默认 journal 模式（rollback journal）：写事务会阻塞读，读也会阻塞写，读写互斥。
 - WAL（Write-Ahead Logging）：写追加到 -wal 文件，读继续走主库，**读写不再互斥**，只有写-写仍然串行。
-- 一行 PRAGMA 开启（本项目在 `app/database.py` 的 engine connect 事件里执行 `PRAGMA journal_mode=WAL`），对"读多写少"的博客场景收益明显。【待填：优化前后数据】
+- 一行 PRAGMA 开启（本项目在 `app/database.py` 的 engine connect 事件里执行 `PRAGMA journal_mode=WAL`），对"读多写少"的博客场景收益明显。
+- **本项目实测**：WAL 与连接池扩容、login 改同步一起部署在 perf-opt 分支；读多写零的压测场景里 WAL 没有直接 TPS 收益（读本来就不互斥），它的价值在写并发——busy_timeout=30s 让写锁等待而不是立刻 `database is locked`。归因时要诚实：读场景的提升来自另外两项优化（CPU 多核占用是直接证据）。
 - 边界：WAL 解决读写互斥，不解决写-写冲突；并发写更高时还是要换客户端/服务端数据库（PostgreSQL + 连接池）。
+
+## 13. FastAPI 的 async 接口里能不能跑 CPU 密集操作？（本项目最重要的教训）
+
+**不能。** `async def` 端点直接跑在事件循环上，循环是单线程的：bcrypt 校验一次 ~250ms，期间**整个服务**（所有接口、所有连接）都停摆。本项目实测证据链：
+
+1. 登录专项：`async def login` 时 10 并发就把单核打到 88%，TPS 封顶 ~4/s；
+2. 混压场景：每级爬坡的登录风暴阻塞循环 → 线程池占满 → 连接池 checkout 排队 30s 超时 → 246 次 HTTP 500，拐点出现在 50→100 并发；
+3. 高压退场后服务"假死"（进程活着但不 accept，CPU≈0），重启才恢复；
+4. **修复**：改成同步 `def`（FastAPI 自动放进 anyio 线程池），bcrypt 在 40 个线程里并行、跨核执行——登录 TPS 4.2→35.7（8.5 倍），进程 CPU 从 88%（1 核）到 1560%（~16 核），混合场景 200 并发线性扩展零错误，假死消失。
+
+规则记忆：**IO 等待用 async；CPU 密集要么同步 def 进线程池，要么 run_in_threadpool / 进程池，绝不能裸跑在循环上。**
 
 ## 11. 吞吐拐点怎么判断？
 
